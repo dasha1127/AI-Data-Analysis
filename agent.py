@@ -1,204 +1,79 @@
-import re
-import traceback
+"""
+DataAgent — routes natural language questions to chart + text answers.
+
+Two modes:
+  LLM mode  : Groq API generates pandas/plotly code, agent executes it safely.
+  Rule-based: Intent classification + hardcoded chart templates (no API needed).
+"""
+
+from __future__ import annotations
+
 import io
+import logging
+import re
+from typing import Any
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
+
+from config import CHART, INTENT_PATTERNS, MODEL
+
+logger = logging.getLogger(__name__)
+
+# ── Types ─────────────────────────────────────────────────────────────────────
+
+AnalysisResult = dict[str, Any]  # keys: "fig", "text", "code" (all optional)
 
 
-INTENT_PATTERNS = {
-    "correlation": ["correlat", "relationship", "relate", "vs", "versus", "impact", "affect"],
-    "distribution": ["distribut", "spread", "histogram", "range", "frequency"],
-    "trend": ["trend", "over time", "timeline", "change", "growth", "decline"],
-    "top": ["top", "highest", "most", "best", "largest", "biggest", "rank"],
-    "bottom": ["bottom", "lowest", "least", "worst", "smallest"],
-    "compare": ["compar", "differ", "between", "group", "categor", "by"],
-    "summary": ["summar", "overview", "describe", "statistics", "stat", "info"],
-    "missing": ["missing", "null", "nan", "empty", "incomplete"],
-    "outlier": ["outlier", "anomal", "unusual", "extreme", "weird"],
-    "average": ["average", "mean", "median", "typical"],
-    "count": ["count", "how many", "number of", "total"],
-}
+# ── Exceptions ────────────────────────────────────────────────────────────────
 
+class AnalysisError(Exception):
+    """Raised when analysis fails and cannot recover."""
+
+
+class CodeExecutionError(AnalysisError):
+    """Raised when LLM-generated code fails to execute."""
+
+
+# ── Intent detection ─────────────────────────────────────────────────────────
 
 def detect_intent(question: str) -> str:
-    q = question.lower()
+    """Return the analysis intent for a plain-English question."""
+    lowered = question.lower()
     for intent, keywords in INTENT_PATTERNS.items():
-        if any(kw in q for kw in keywords):
+        if any(kw in lowered for kw in keywords):
             return intent
     return "summary"
 
 
-def _extract_column(question: str, df: pd.DataFrame) -> str | None:
-    q = question.lower()
-    for col in df.columns:
-        if col.lower() in q:
-            return col
-    return None
+# ── DataFrame helpers ─────────────────────────────────────────────────────────
 
-
-def _numeric_cols(df: pd.DataFrame) -> list[str]:
+def numeric_cols(df: pd.DataFrame) -> list[str]:
     return df.select_dtypes(include="number").columns.tolist()
 
 
-def _categorical_cols(df: pd.DataFrame) -> list[str]:
+def categorical_cols(df: pd.DataFrame) -> list[str]:
     return df.select_dtypes(include=["object", "category"]).columns.tolist()
 
 
-def rule_based_analysis(question: str, df: pd.DataFrame) -> dict:
-    """Fallback analysis when no LLM key is available."""
-    intent = detect_intent(question)
-    col = _extract_column(question, df)
-    num_cols = _numeric_cols(df)
-    cat_cols = _categorical_cols(df)
-
-    try:
-        if intent == "correlation" and len(num_cols) >= 2:
-            corr = df[num_cols].corr()
-            fig = px.imshow(
-                corr, text_auto=".2f", title="Correlation Heatmap",
-                color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-            )
-            unstacked = corr.unstack()
-            # Remove self-correlations and duplicate pairs
-            mask = unstacked.index.get_level_values(0) != unstacked.index.get_level_values(1)
-            top = unstacked[mask].sort_values(ascending=False).drop_duplicates()
-            text = f"Strongest correlation: {top.index[0][0]} ↔ {top.index[0][1]} ({top.iloc[0]:.2f})"
-            return {"fig": fig, "text": text}
-
-        elif intent == "distribution":
-            target = col or (num_cols[0] if num_cols else None)
-            if target and target in num_cols:
-                fig = px.histogram(df, x=target, nbins=30, title=f"Distribution of {target}",
-                                   marginal="box")
-                stats = df[target].describe()
-                text = f"Mean: {stats['mean']:.2f} | Median: {df[target].median():.2f} | Std: {stats['std']:.2f}"
-            else:
-                target = col or (cat_cols[0] if cat_cols else df.columns[0])
-                vc = df[target].value_counts().head(20)
-                fig = px.bar(x=vc.index, y=vc.values, title=f"Distribution of {target}",
-                             labels={"x": target, "y": "Count"})
-                text = f"Most common: {vc.index[0]} ({vc.iloc[0]} times)"
-            return {"fig": fig, "text": text}
-
-        elif intent in ("top", "bottom"):
-            target = col or (num_cols[0] if num_cols else None)
-            if not target:
-                return {"text": "Please specify a column name in your question."}
-            groupby_col = cat_cols[0] if cat_cols else None
-            if groupby_col and groupby_col != target:
-                grp = df.groupby(groupby_col)[target].mean().reset_index()
-                grp = grp.sort_values(target, ascending=(intent == "bottom")).head(10)
-                fig = px.bar(grp, x=groupby_col, y=target,
-                             title=f"{'Top' if intent == 'top' else 'Bottom'} 10 by {target}")
-            else:
-                sorted_df = df[[target]].dropna().sort_values(
-                    target, ascending=(intent == "bottom")
-                ).head(10)
-                fig = px.bar(sorted_df, y=target, title=f"{'Top' if intent == 'top' else 'Bottom'} 10 values of {target}")
-            return {"fig": fig}
-
-        elif intent == "compare" and cat_cols and num_cols:
-            cat = col if col in cat_cols else cat_cols[0]
-            num = num_cols[0]
-            top_cats = df[cat].value_counts().head(10).index
-            filtered = df[df[cat].isin(top_cats)]
-            fig = px.box(filtered, x=cat, y=num, title=f"{num} by {cat}")
-            means = filtered.groupby(cat)[num].mean().sort_values(ascending=False)
-            text = f"Highest avg {num}: {means.index[0]} ({means.iloc[0]:.2f})"
-            return {"fig": fig, "text": text}
-
-        elif intent == "missing":
-            missing = df.isnull().sum()
-            missing_pct = (missing / len(df) * 100).round(2)
-            miss_df = pd.DataFrame({"Missing Count": missing, "Missing %": missing_pct})
-            miss_df = miss_df[miss_df["Missing Count"] > 0].sort_values("Missing %", ascending=False)
-            if miss_df.empty:
-                return {"text": "Great news! No missing values found in this dataset."}
-            fig = px.bar(miss_df, y=miss_df.index, x="Missing %", orientation="h",
-                         title="Missing Values by Column")
-            text = f"Total missing: {missing.sum()} | Columns affected: {(missing > 0).sum()}"
-            return {"fig": fig, "text": text}
-
-        elif intent == "outlier" and num_cols:
-            target = col or num_cols[0]
-            q1, q3 = df[target].quantile([0.25, 0.75])
-            iqr = q3 - q1
-            outliers = df[(df[target] < q1 - 1.5 * iqr) | (df[target] > q3 + 1.5 * iqr)]
-            fig = px.box(df, y=target, title=f"Outlier Detection — {target}",
-                         points="outliers")
-            text = f"Found {len(outliers)} outliers ({len(outliers)/len(df)*100:.1f}%) in {target}."
-            return {"fig": fig, "text": text}
-
-        elif intent == "trend" and num_cols:
-            # Prefer integer year column for groupby (e.g. World Happiness)
-            year_col = next((c for c in df.columns if c.lower() == "year"), None)
-            # Don't use "year" itself as the metric target
-            non_year_nums = [c for c in num_cols if c.lower() != "year"]
-            target = (col if col and col.lower() != "year" else None) or (non_year_nums[0] if non_year_nums else num_cols[0])
-            date_cols = [c for c in df.columns if "date" in c.lower() or "time" in c.lower()]
-
-            if year_col:
-                group_col = next((c for c in cat_cols if c not in ("year",)), None)
-                if group_col:
-                    top_cats = df[group_col].value_counts().head(8).index
-                    trend = df[df[group_col].isin(top_cats)].groupby([year_col, group_col])[target].mean().reset_index()
-                    fig = px.line(trend, x=year_col, y=target, color=group_col,
-                                  title=f"{target} by {group_col} over years", markers=True)
-                else:
-                    trend = df.groupby(year_col)[target].mean().reset_index()
-                    fig = px.line(trend, x=year_col, y=target,
-                                  title=f"Average {target} over years", markers=True)
-                return {"fig": fig}
-            elif date_cols:
-                x_col = date_cols[0]
-                try:
-                    df = df.copy()
-                    df[x_col] = pd.to_datetime(df[x_col], errors="coerce")
-                    trend = df.dropna(subset=[x_col]).sort_values(x_col).set_index(x_col)[target].resample("ME").mean().reset_index()
-                    fig = px.line(trend, x=x_col, y=target, title=f"{target} over Time")
-                    return {"fig": fig}
-                except Exception:
-                    pass
-            fig = px.line(df[target].dropna().reset_index(), x="index", y=target, title=f"{target} trend")
-            return {"fig": fig}
-
-        elif intent == "average" and num_cols:
-            target = col or num_cols[0]
-            if cat_cols:
-                cat = cat_cols[0]
-                top_cats = df[cat].value_counts().head(15).index
-                avg = df[df[cat].isin(top_cats)].groupby(cat)[target].mean().sort_values(ascending=False).reset_index()
-                fig = px.bar(avg, x=cat, y=target, title=f"Average {target} by {cat}")
-                text = f"Overall average {target}: {df[target].mean():.2f}"
-                return {"fig": fig, "text": text}
-            else:
-                stats = df[num_cols].mean().reset_index()
-                stats.columns = ["Column", "Mean"]
-                fig = px.bar(stats, x="Column", y="Mean", title="Mean of all numeric columns")
-                return {"fig": fig}
-
-        else:  # summary
-            buf = io.StringIO()
-            df.describe(include="all").to_csv(buf)
-            shape_text = f"Shape: {df.shape[0]} rows × {df.shape[1]} columns"
-            num_text = f"Numeric columns: {', '.join(num_cols) or 'none'}"
-            cat_text = f"Categorical columns: {', '.join(cat_cols) or 'none'}"
-            miss_text = f"Missing values: {df.isnull().sum().sum()}"
-            if num_cols:
-                fig = px.imshow(df[num_cols].corr(), text_auto=".2f",
-                                title="Correlation Overview", color_continuous_scale="RdBu_r",
-                                zmin=-1, zmax=1)
-                return {"fig": fig, "text": "\n".join([shape_text, num_text, cat_text, miss_text])}
-            return {"text": "\n".join([shape_text, num_text, cat_text, miss_text])}
-
-    except Exception as e:
-        return {"text": f"Could not analyze: {str(e)}. Try rephrasing with a column name."}
+def extract_column(question: str, df: pd.DataFrame) -> str | None:
+    """Return the first column name mentioned in the question, or None."""
+    lowered = question.lower()
+    return next((col for col in df.columns if col.lower() in lowered), None)
 
 
-def _safe_exec(code: str, df: pd.DataFrame) -> dict:
-    local_ns = {
+# ── Safe code execution ───────────────────────────────────────────────────────
+
+def safe_exec(code: str, df: pd.DataFrame) -> AnalysisResult:
+    """
+    Execute LLM-generated code in an isolated namespace.
+
+    The code may assign to `fig` (plotly figure) or `result` (text answer).
+    A copy of df is provided so the original is never mutated.
+    """
+    namespace: dict[str, Any] = {
         "df": df.copy(),
         "pd": pd,
         "px": px,
@@ -208,120 +83,347 @@ def _safe_exec(code: str, df: pd.DataFrame) -> dict:
         "result": None,
     }
     try:
-        exec(code, {"__builtins__": {}}, local_ns)  # noqa: S102
+        exec(code, {"__builtins__": {}}, namespace)  # noqa: S102
     except Exception:
-        exec(code, local_ns)  # retry with builtins if restricted exec fails  # noqa: S102
+        # Retry with builtins if the restricted sandbox blocks a needed call
+        exec(code, namespace)  # noqa: S102
 
-    out = {}
-    if local_ns.get("fig") is not None:
-        out["fig"] = local_ns["fig"]
-    if local_ns.get("result") is not None:
-        out["text"] = str(local_ns["result"])
-    return out
+    output: AnalysisResult = {}
+    if namespace["fig"] is not None:
+        output["fig"] = namespace["fig"]
+    if namespace["result"] is not None:
+        output["text"] = str(namespace["result"])
+    return output
 
 
-def llm_analysis(question: str, df: pd.DataFrame, groq_key: str) -> dict:
-    """LLM-powered analysis via Groq (free tier)."""
-    from groq import Groq
+# ── DataAgent ─────────────────────────────────────────────────────────────────
 
-    client = Groq(api_key=groq_key)
+class DataAgent:
+    """
+    Wraps a DataFrame and answers natural-language questions about it.
 
-    schema_lines = []
-    for col in df.columns:
-        dtype = str(df[col].dtype)
-        sample = df[col].dropna().head(3).tolist()
-        schema_lines.append(f"  - {col} ({dtype}): e.g. {sample}")
+    Usage:
+        agent = DataAgent(df, groq_key="gsk_...")
+        result = agent.analyze("Which country improved the most?")
+        # result = {"fig": <plotly figure>, "text": "..."}
+    """
 
-    schema = "\n".join(schema_lines)
-    shape = f"{df.shape[0]} rows × {df.shape[1]} cols"
+    def __init__(self, df: pd.DataFrame, groq_key: str | None = None) -> None:
+        self.df = df
+        self.groq_key = groq_key
+        self._num_cols = numeric_cols(df)
+        self._cat_cols = categorical_cols(df)
 
-    system_prompt = """You are a data analysis expert. Generate Python code to answer questions about a pandas DataFrame.
+    # ── Public ────────────────────────────────────────────────────────────────
 
-Rules:
-- The dataframe is already loaded as `df`
-- Available imports: pd (pandas), px (plotly.express), go (plotly.graph_objects), np (numpy)
-- For visualizations: create a plotly figure and assign it to `fig`
-- For text answers: assign the answer string to `result`
-- You can set both `fig` and `result`
-- Write clean, executable Python code only — no markdown fences, no explanation
-- Keep the code concise and correct
-"""
+    def analyze(self, question: str) -> AnalysisResult:
+        """Route a question to LLM or rule-based analysis and return a result."""
+        if self.groq_key:
+            try:
+                return self._llm_analyze(question)
+            except Exception as exc:
+                logger.warning("LLM analysis failed (%s), falling back to rules.", exc)
+        return self._rule_based_analyze(question)
 
-    user_msg = f"""Dataset info:
-Shape: {shape}
-Columns:
-{schema}
+    def auto_insights(self) -> list[AnalysisResult]:
+        """Return a list of automatic insight charts for the loaded dataset."""
+        insights: list[AnalysisResult] = []
 
-Question: {question}
+        if len(self._num_cols) >= 2:
+            corr = self.df[self._num_cols].corr()
+            insights.append({
+                "title": "Correlations",
+                "fig": px.imshow(
+                    corr, text_auto=".2f", title="Correlation Heatmap",
+                    color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                    height=CHART.insight_height,
+                ),
+            })
 
-Write Python code to answer this:"""
+        if self._num_cols:
+            col = self._num_cols[0]
+            insights.append({
+                "title": f"Distribution of {col}",
+                "fig": px.histogram(
+                    self.df, x=col, nbins=CHART.histogram_bins,
+                    title=f"Distribution — {col}", marginal="box",
+                    height=350,
+                ),
+            })
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.1,
-        max_tokens=1024,
-    )
+        if self._cat_cols and self._num_cols:
+            cat, num = self._cat_cols[0], self._num_cols[0]
+            top = self.df[cat].value_counts().head(CHART.top_n_categories).index
+            filtered = self.df[self.df[cat].isin(top)]
+            insights.append({
+                "title": f"{num} by {cat}",
+                "fig": px.box(filtered, x=cat, y=num, title=f"{num} by {cat}", height=350),
+            })
 
-    code = response.choices[0].message.content.strip()
-    code = re.sub(r"^```(?:python)?\n?", "", code)
-    code = re.sub(r"\n?```$", "", code)
+        missing = self.df.isnull().sum()
+        if missing.sum() > 0:
+            miss_df = (missing[missing > 0] / len(self.df) * 100).round(1).reset_index()
+            miss_df.columns = ["Column", "Missing %"]
+            insights.append({
+                "title": "Missing Values",
+                "fig": px.bar(miss_df, x="Column", y="Missing %",
+                              title="Missing Values (%)", height=300),
+            })
 
-    try:
-        result = _safe_exec(code, df)
-        result["code"] = code
-        return result
-    except Exception as e:
+        return insights
+
+    # ── Private: LLM mode ─────────────────────────────────────────────────────
+
+    def _build_schema(self) -> str:
+        lines = [
+            f"  - {col} ({self.df[col].dtype}): e.g. {self.df[col].dropna().head(3).tolist()}"
+            for col in self.df.columns
+        ]
+        return "\n".join(lines)
+
+    def _llm_analyze(self, question: str) -> AnalysisResult:
+        from groq import Groq  # lazy import — only needed in LLM mode
+
+        client = Groq(api_key=self.groq_key)
+        schema = self._build_schema()
+        shape = f"{self.df.shape[0]} rows × {self.df.shape[1]} cols"
+
+        system_prompt = (
+            "You are a data analysis expert. Generate Python code to answer questions "
+            "about a pandas DataFrame.\n\n"
+            "Rules:\n"
+            "- The dataframe is already loaded as `df`\n"
+            "- Available: pd (pandas), px (plotly.express), go (plotly.graph_objects), np (numpy)\n"
+            "- Assign charts to `fig`, text answers to `result`\n"
+            "- Return executable Python only — no markdown fences, no explanation\n"
+        )
+
+        user_msg = f"Dataset — Shape: {shape}\nColumns:\n{schema}\n\nQuestion: {question}\n\nCode:"
+
+        response = client.chat.completions.create(
+            model=MODEL.name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_msg},
+            ],
+            temperature=MODEL.temperature,
+            max_tokens=MODEL.max_tokens,
+        )
+
+        code = response.choices[0].message.content.strip()
+        code = re.sub(r"^```(?:python)?\n?", "", code)
+        code = re.sub(r"\n?```$", "", code)
+
+        try:
+            result = safe_exec(code, self.df)
+            result["code"] = code
+            return result
+        except Exception as exc:
+            raise CodeExecutionError(f"Generated code failed: {exc}\n\n{code}") from exc
+
+    # ── Private: rule-based mode ──────────────────────────────────────────────
+
+    def _rule_based_analyze(self, question: str) -> AnalysisResult:
+        intent = detect_intent(question)
+        col = extract_column(question, self.df)
+        num = self._num_cols
+        cat = self._cat_cols
+
+        try:
+            return self._dispatch(intent, col, num, cat)
+        except Exception as exc:
+            logger.exception("Rule-based analysis failed for intent '%s'.", intent)
+            return {"text": f"Could not analyze: {exc}. Try rephrasing with a column name."}
+
+    def _dispatch(
+        self,
+        intent: str,
+        col: str | None,
+        num: list[str],
+        cat: list[str],
+    ) -> AnalysisResult:
+        if intent == "correlation" and len(num) >= 2:
+            return self._chart_correlation(num)
+        if intent == "distribution":
+            return self._chart_distribution(col, num, cat)
+        if intent in ("top", "bottom"):
+            return self._chart_ranking(intent, col, num, cat)
+        if intent == "compare" and cat and num:
+            return self._chart_compare(col, num, cat)
+        if intent == "missing":
+            return self._chart_missing()
+        if intent == "outlier" and num:
+            return self._chart_outlier(col, num)
+        if intent == "trend" and num:
+            return self._chart_trend(col, num, cat)
+        if intent == "average" and num:
+            return self._chart_average(col, num, cat)
+        return self._chart_summary(num, cat)
+
+    def _chart_correlation(self, num: list[str]) -> AnalysisResult:
+        corr = self.df[num].corr()
+        fig = px.imshow(corr, text_auto=".2f", title="Correlation Heatmap",
+                        color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
+        unstacked = corr.unstack()
+        mask = unstacked.index.get_level_values(0) != unstacked.index.get_level_values(1)
+        top = unstacked[mask].sort_values(ascending=False).drop_duplicates()
+        text = f"Strongest: {top.index[0][0]} ↔ {top.index[0][1]} ({top.iloc[0]:.2f})"
+        return {"fig": fig, "text": text}
+
+    def _chart_distribution(
+        self, col: str | None, num: list[str], cat: list[str]
+    ) -> AnalysisResult:
+        target = col or (num[0] if num else None)
+        if target and target in num:
+            stats = self.df[target].describe()
+            return {
+                "fig": px.histogram(self.df, x=target, nbins=CHART.histogram_bins,
+                                    title=f"Distribution of {target}", marginal="box"),
+                "text": (f"Mean: {stats['mean']:.2f} | "
+                         f"Median: {self.df[target].median():.2f} | "
+                         f"Std: {stats['std']:.2f}"),
+            }
+        target = col or (cat[0] if cat else self.df.columns[0])
+        vc = self.df[target].value_counts().head(20)
         return {
-            "text": f"Code execution error: {e}\n\nGenerated code:\n{code}",
-            "code": code,
+            "fig": px.bar(x=vc.index, y=vc.values, title=f"Distribution of {target}",
+                          labels={"x": target, "y": "Count"}),
+            "text": f"Most common: {vc.index[0]} ({vc.iloc[0]} times)",
         }
 
+    def _chart_ranking(
+        self, intent: str, col: str | None, num: list[str], cat: list[str]
+    ) -> AnalysisResult:
+        target = col or (num[0] if num else None)
+        if not target:
+            return {"text": "Please mention a column name in your question."}
+        ascending = intent == "bottom"
+        label = "Top" if intent == "top" else "Bottom"
+        if cat and cat[0] != target:
+            grp = (self.df.groupby(cat[0])[target].mean()
+                   .reset_index()
+                   .sort_values(target, ascending=ascending)
+                   .head(CHART.top_n_categories))
+            return {"fig": px.bar(grp, x=cat[0], y=target, title=f"{label} 10 by {target}")}
+        sorted_df = (self.df[[target]].dropna()
+                     .sort_values(target, ascending=ascending)
+                     .head(CHART.top_n_categories))
+        return {"fig": px.bar(sorted_df, y=target, title=f"{label} 10 values of {target}")}
 
-def analyze(question: str, df: pd.DataFrame, groq_key: str | None = None) -> dict:
-    if groq_key:
-        try:
-            return llm_analysis(question, df, groq_key)
-        except Exception as e:
-            return rule_based_analysis(question, df)
-    return rule_based_analysis(question, df)
+    def _chart_compare(
+        self, col: str | None, num: list[str], cat: list[str]
+    ) -> AnalysisResult:
+        cat_col = col if col in cat else cat[0]
+        num_col = num[0]
+        top = self.df[cat_col].value_counts().head(CHART.top_n_categories).index
+        filtered = self.df[self.df[cat_col].isin(top)]
+        means = filtered.groupby(cat_col)[num_col].mean().sort_values(ascending=False)
+        return {
+            "fig": px.box(filtered, x=cat_col, y=num_col, title=f"{num_col} by {cat_col}"),
+            "text": f"Highest avg {num_col}: {means.index[0]} ({means.iloc[0]:.2f})",
+        }
+
+    def _chart_missing(self) -> AnalysisResult:
+        missing = self.df.isnull().sum()
+        miss_df = pd.DataFrame({
+            "Missing Count": missing,
+            "Missing %": (missing / len(self.df) * 100).round(2),
+        })
+        miss_df = miss_df[miss_df["Missing Count"] > 0].sort_values("Missing %", ascending=False)
+        if miss_df.empty:
+            return {"text": "No missing values found in this dataset."}
+        return {
+            "fig": px.bar(miss_df, y=miss_df.index, x="Missing %",
+                          orientation="h", title="Missing Values by Column"),
+            "text": (f"Total missing: {missing.sum()} | "
+                     f"Columns affected: {(missing > 0).sum()}"),
+        }
+
+    def _chart_outlier(self, col: str | None, num: list[str]) -> AnalysisResult:
+        target = col or num[0]
+        q1, q3 = self.df[target].quantile([0.25, 0.75])
+        iqr = q3 - q1
+        n_outliers = int(((self.df[target] < q1 - 1.5 * iqr) |
+                          (self.df[target] > q3 + 1.5 * iqr)).sum())
+        return {
+            "fig": px.box(self.df, y=target, title=f"Outlier Detection — {target}",
+                          points="outliers"),
+            "text": f"Found {n_outliers} outliers ({n_outliers / len(self.df) * 100:.1f}%) in {target}.",
+        }
+
+    def _chart_trend(
+        self, col: str | None, num: list[str], cat: list[str]
+    ) -> AnalysisResult:
+        year_col = next((c for c in self.df.columns if c.lower() == "year"), None)
+        non_year = [c for c in num if c.lower() != "year"]
+        target = (col if col and col.lower() != "year" else None) or (non_year[0] if non_year else num[0])
+
+        if year_col:
+            group_col = next((c for c in cat if c != year_col), None)
+            if group_col:
+                top = self.df[group_col].value_counts().head(CHART.top_n_trend_groups).index
+                trend = (self.df[self.df[group_col].isin(top)]
+                         .groupby([year_col, group_col])[target].mean()
+                         .reset_index())
+                return {"fig": px.line(trend, x=year_col, y=target, color=group_col,
+                                       title=f"{target} by {group_col} over years", markers=True)}
+            trend = self.df.groupby(year_col)[target].mean().reset_index()
+            return {"fig": px.line(trend, x=year_col, y=target,
+                                   title=f"Average {target} over years", markers=True)}
+
+        date_cols = [c for c in self.df.columns if "date" in c.lower() or "time" in c.lower()]
+        if date_cols:
+            x_col = date_cols[0]
+            tmp = self.df.copy()
+            tmp[x_col] = pd.to_datetime(tmp[x_col], errors="coerce")
+            trend = (tmp.dropna(subset=[x_col])
+                     .sort_values(x_col)
+                     .set_index(x_col)[target]
+                     .resample("ME").mean()
+                     .reset_index())
+            return {"fig": px.line(trend, x=x_col, y=target, title=f"{target} over Time")}
+
+        return {"fig": px.line(self.df[target].dropna().reset_index(),
+                               x="index", y=target, title=f"{target} trend")}
+
+    def _chart_average(
+        self, col: str | None, num: list[str], cat: list[str]
+    ) -> AnalysisResult:
+        target = col or num[0]
+        if cat:
+            top = self.df[cat[0]].value_counts().head(15).index
+            avg = (self.df[self.df[cat[0]].isin(top)]
+                   .groupby(cat[0])[target].mean()
+                   .sort_values(ascending=False)
+                   .reset_index())
+            return {
+                "fig": px.bar(avg, x=cat[0], y=target, title=f"Average {target} by {cat[0]}"),
+                "text": f"Overall average {target}: {self.df[target].mean():.2f}",
+            }
+        stats = self.df[num].mean().reset_index()
+        stats.columns = ["Column", "Mean"]
+        return {"fig": px.bar(stats, x="Column", y="Mean", title="Mean of all numeric columns")}
+
+    def _chart_summary(self, num: list[str], cat: list[str]) -> AnalysisResult:
+        text = "\n".join([
+            f"Shape: {self.df.shape[0]} rows × {self.df.shape[1]} columns",
+            f"Numeric columns: {', '.join(num) or 'none'}",
+            f"Categorical columns: {', '.join(cat) or 'none'}",
+            f"Missing values: {self.df.isnull().sum().sum()}",
+        ])
+        if len(num) >= 2:
+            fig = px.imshow(self.df[num].corr(), text_auto=".2f",
+                            title="Correlation Overview", color_continuous_scale="RdBu_r",
+                            zmin=-1, zmax=1)
+            return {"fig": fig, "text": text}
+        return {"text": text}
 
 
-def auto_insights(df: pd.DataFrame) -> list[dict]:
-    """Generate automatic insights shown on dataset upload."""
-    insights = []
-    num_cols = _numeric_cols(df)
-    cat_cols = _categorical_cols(df)
+# ── Module-level convenience wrappers (keep app.py unchanged) ─────────────────
 
-    if num_cols and len(num_cols) >= 2:
-        corr = df[num_cols].corr()
-        fig = px.imshow(corr, text_auto=".2f", title="Correlation Heatmap",
-                        color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-                        height=400)
-        insights.append({"title": "Correlations", "fig": fig})
+def analyze(question: str, df: pd.DataFrame, groq_key: str | None = None) -> AnalysisResult:
+    return DataAgent(df, groq_key).analyze(question)
 
-    if num_cols:
-        sample_col = num_cols[0]
-        fig = px.histogram(df, x=sample_col, nbins=30,
-                           title=f"Distribution — {sample_col}", marginal="box", height=350)
-        insights.append({"title": f"Distribution of {sample_col}", "fig": fig})
 
-    if cat_cols and num_cols:
-        cat, num = cat_cols[0], num_cols[0]
-        top_cats = df[cat].value_counts().head(10).index
-        filtered = df[df[cat].isin(top_cats)]
-        fig = px.box(filtered, x=cat, y=num, title=f"{num} by {cat}", height=350)
-        insights.append({"title": f"{num} by {cat}", "fig": fig})
-
-    missing = df.isnull().sum()
-    if missing.sum() > 0:
-        miss_df = (missing[missing > 0] / len(df) * 100).round(1).reset_index()
-        miss_df.columns = ["Column", "Missing %"]
-        fig = px.bar(miss_df, x="Column", y="Missing %",
-                     title="Missing Values (%)", height=300)
-        insights.append({"title": "Missing Values", "fig": fig})
-
-    return insights
+def auto_insights(df: pd.DataFrame) -> list[AnalysisResult]:
+    return DataAgent(df).auto_insights()
