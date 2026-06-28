@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DataMind AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="logo">🧠 DataMind AI</div>
+
+    <div class="sidebar-section">
+      <h3>Mode</h3>
+      <span class="pill off" id="pill-status">
+        <span class="dot"></span> Rule-based mode
+      </span>
+      <br><br>
+      <input
+        id="groq-key"
+        type="password"
+        placeholder="Paste Groq API key for LLM mode"
+        style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border);
+               border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.8rem;outline:none;"
+      />
+      <p style="font-size:0.7rem;color:var(--muted);margin-top:6px">Free key at console.groq.com</p>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Datasets</h3>
+      <button class="dataset-btn" data-name="happiness">🌍 World Happiness 2015–2022</button>
+      <button class="dataset-btn" data-name="tips">🍽️ Restaurant Tips</button>
+      <button class="dataset-btn" data-name="iris">🌸 Iris Flowers</button>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Upload CSV</h3>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="upload-input" accept=".csv" />
+        <span class="icon">📂</span>
+        Click or drag a CSV here
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Schema</h3>
+      <ul class="schema-list" id="schema-list">
+        <li style="color:var(--muted);font-size:0.75rem">Select a dataset to see columns</li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Try asking</h3>
+      <div style="font-size:0.78rem;color:var(--muted);line-height:1.9">
+        • Happiness trend over years<br>
+        • Top 10 happiest countries<br>
+        • Correlation between GDP and happiness<br>
+        • Any missing values?<br>
+        • Compare happiness by region<br>
+        • Outliers in happiness score
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main>
+    <header>
+      <h1 class="hero-title">DataMind AI</h1>
+      <p class="hero-sub">Upload any dataset · Ask questions in plain English · Get instant AI-powered insights</p>
+    </header>
+
+    <div class="metrics" id="metrics">
+      <div class="metric-card"><div class="metric-num">—</div><div class="metric-label">Rows</div></div>
+      <div class="metric-card"><div class="metric-num">—</div><div class="metric-label">Columns</div></div>
+      <div class="metric-card"><div class="metric-num">—</div><div class="metric-label">Numeric</div></div>
+      <div class="metric-card"><div class="metric-num">—</div><div class="metric-label">Categorical</div></div>
+      <div class="metric-card"><div class="metric-num">—</div><div class="metric-label">Years</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="insights">📊 Auto-Insights</button>
+      <button class="tab-btn"        data-tab="trends">🌍 Happiness Trends</button>
+      <button class="tab-btn"        data-tab="chat">💬 Chat</button>
+      <button class="tab-btn"        data-tab="data">🗂 Data</button>
+    </div>
+
+    <div class="tab-panels">
+
+      <div class="panel active" id="panel-insights">
+        <div class="empty-state">
+          <span class="empty-icon">📊</span>
+          Select a dataset to generate insights
+        </div>
+      </div>
+
+      <div class="panel" id="panel-trends">
+        <div class="empty-state">
+          <span class="empty-icon">🌍</span>
+          Select "World Happiness 2015–2022" to see trends
+        </div>
+      </div>
+
+      <div class="panel" id="panel-chat">
+        <div class="chat-wrap">
+          <div class="chat-messages" id="chat-messages">
+            <div class="bubble agent">
+              <div class="bubble-meta">DataMind</div>
+              Hey! Select a dataset and ask me anything — I'll answer with charts and text 🧠
+            </div>
+          </div>
+          <div class="chat-input-row">
+            <input id="chat-input" class="chat-input" type="text"
+                   placeholder="Ask anything about your data..." autocomplete="off" />
+            <button id="send-btn" class="send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-data">
+        <div class="empty-state">
+          <span class="empty-icon">🗂</span>
+          Select a dataset to preview data
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
