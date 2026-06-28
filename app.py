@@ -8,159 +8,299 @@ from data_loader import load_combined, most_improved
 
 load_dotenv()
 
+GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+
 st.set_page_config(
-    page_title="AI Data Analysis Agent",
-    page_icon="🤖",
+    page_title="DataMind AI",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STYLES
+# Teaching note:
+#   @keyframes  = defines an animation (like a loop of CSS states)
+#   gradient    = smooth blend between colors
+#   glassmorphism = frosted-glass card using backdrop-filter + semi-transparent bg
+#   transition  = smooth change when hovering
+#   box-shadow with color = glowing border effect
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main-title { font-size: 2.2rem; font-weight: 800; color: #4F8BF9; margin-bottom: 0; }
-    .subtitle   { color: #888; font-size: 1rem; margin-top: 0; }
-    .user-msg   { background: #2A2A3E; border-radius: 12px; padding: 12px 16px; margin: 8px 0; }
-    .agent-msg  { background: #1A2A1A; border-left: 3px solid #4CAF50;
-                  border-radius: 0 12px 12px 0; padding: 12px 16px; margin: 8px 0; }
-    .tip-box    { background: #2A1A2E; border-left: 3px solid #9B59B6;
-                  border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 0.85rem; }
+/* ── Animated gradient background on the app ── */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0a0a1a 0%, #0d1b2a 50%, #0a0a1a 100%);
+    background-size: 400% 400%;
+    animation: bgShift 12s ease infinite;
+}
+@keyframes bgShift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* ── Sidebar glassmorphism ── */
+[data-testid="stSidebar"] {
+    background: rgba(15, 20, 40, 0.85) !important;
+    backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(79, 139, 249, 0.2);
+}
+
+/* ── Animated gradient title text ── */
+.hero-title {
+    font-size: 3rem;
+    font-weight: 900;
+    background: linear-gradient(90deg, #4F8BF9, #a78bfa, #38bdf8, #4F8BF9);
+    background-size: 300% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: textShine 4s linear infinite;
+    margin: 0;
+    letter-spacing: -1px;
+}
+@keyframes textShine {
+    0%   { background-position: 0% center; }
+    100% { background-position: 300% center; }
+}
+
+.hero-sub {
+    color: #7ca3e0;
+    font-size: 1.05rem;
+    margin-top: 4px;
+    margin-bottom: 24px;
+}
+
+/* ── Glowing metric cards ── */
+.metric-card {
+    background: rgba(79, 139, 249, 0.08);
+    border: 1px solid rgba(79, 139, 249, 0.3);
+    border-radius: 14px;
+    padding: 18px 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    animation: fadeUp 0.5s ease both;
+}
+.metric-card:hover {
+    background: rgba(79, 139, 249, 0.18);
+    box-shadow: 0 0 20px rgba(79, 139, 249, 0.35);
+    transform: translateY(-3px);
+}
+.metric-num  { font-size: 2rem; font-weight: 800; color: #4F8BF9; }
+.metric-label{ font-size: 0.75rem; color: #7ca3e0; text-transform: uppercase; letter-spacing: 1px; }
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Chat bubbles ── */
+.user-bubble {
+    background: linear-gradient(135deg, #1e3a5f, #1a2a4a);
+    border: 1px solid rgba(79,139,249,0.4);
+    border-radius: 18px 18px 4px 18px;
+    padding: 12px 18px;
+    margin: 10px 0 10px 60px;
+    color: #e0eaff;
+    animation: slideLeft 0.3s ease;
+}
+.agent-bubble {
+    background: linear-gradient(135deg, #0d2416, #0a1f12);
+    border: 1px solid rgba(52, 211, 153, 0.35);
+    border-radius: 18px 18px 18px 4px;
+    padding: 12px 18px;
+    margin: 10px 60px 10px 0;
+    color: #d1fae5;
+    animation: slideRight 0.3s ease;
+}
+@keyframes slideLeft  { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:translateX(0); } }
+@keyframes slideRight { from { opacity:0; transform:translateX(-20px);} to { opacity:1; transform:translateX(0); } }
+
+.bubble-label { font-size: 0.7rem; opacity: 0.5; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+
+/* ── Glassy info boxes in sidebar ── */
+.info-card {
+    background: rgba(79,139,249,0.07);
+    border: 1px solid rgba(79,139,249,0.2);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 0.82rem;
+    color: #a0b8e0;
+    line-height: 1.7;
+}
+.info-card b { color: #7eb8f9; }
+
+/* ── Status pill ── */
+.pill-on  { background:#064e3b; color:#6ee7b7; border:1px solid #059669;
+            border-radius:20px; padding:3px 12px; font-size:0.75rem; display:inline-block; }
+.pill-off { background:#1e1b4b; color:#a5b4fc; border:1px solid #4338ca;
+            border-radius:20px; padding:3px 12px; font-size:0.75rem; display:inline-block; }
+
+/* ── Tab styling ── */
+[data-testid="stTabs"] button {
+    color: #7ca3e0 !important;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: #4F8BF9 !important;
+    border-bottom: 2px solid #4F8BF9 !important;
+}
+
+/* ── Plotly chart cards ── */
+[data-testid="stPlotlyChart"] {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(79,139,249,0.15);
+    border-radius: 14px;
+    padding: 4px;
+}
+
+/* ── Hide default Streamlit branding ── */
+#MainMenu, footer, header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Setup")
+    st.markdown("### 🧠 DataMind AI")
 
-    groq_key = st.text_input(
-        "Groq API Key (optional — enables LLM)",
-        value=os.getenv("GROQ_API_KEY", ""),
-        type="password",
-        placeholder="gsk_...",
-        help="Free at console.groq.com — no credit card needed",
-    )
-    st.caption("LLM mode: Llama 3.1 70B" if groq_key else "Rule-based mode active")
+    # LLM status pill — reads key from .env only (not shown in UI for security)
+    if GROQ_KEY:
+        st.markdown("<span class='pill-on'>● LLM ON — Llama 3.3 70B</span>", unsafe_allow_html=True)
+    else:
+        st.markdown("<span class='pill-off'>○ Rule-based mode</span>", unsafe_allow_html=True)
+        st.caption("Add GROQ_API_KEY to .env to enable LLM")
 
     st.divider()
-    st.markdown("## 📂 Load Data")
+    st.markdown("**📂 Load Data**")
 
-    upload_tab, sample_tab = st.tabs(["Upload CSV", "Sample Data"])
+    upload_tab, sample_tab = st.tabs(["Upload", "Samples"])
     df = None
     dataset_name = ""
 
     with upload_tab:
-        uploaded = st.file_uploader("Drop any CSV here", type=["csv", "xlsx"])
+        uploaded = st.file_uploader("Drop any CSV", type=["csv", "xlsx"], label_visibility="collapsed")
         if uploaded:
             try:
                 df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                 dataset_name = uploaded.name
-                st.success(f"Loaded {df.shape[0]:,} rows × {df.shape[1]} cols")
+                st.success(f"{df.shape[0]:,} rows loaded")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(str(e))
 
     with sample_tab:
-        sample = st.selectbox("Pick a dataset", [
+        sample = st.selectbox("Dataset", [
             "None",
             "World Happiness 2015–2022",
-            "Tips (regression demo)",
-            "Iris (classification demo)",
-        ])
+            "Tips",
+            "Iris",
+        ], label_visibility="collapsed")
         if sample == "World Happiness 2015–2022":
             try:
                 df = load_combined()
-                dataset_name = "World Happiness Report (2015–2022)"
-                st.success(f"Loaded {df.shape[0]:,} rows × {df.shape[1]} cols — 8 years!")
+                dataset_name = "World Happiness 2015–2022"
+                st.success(f"{df.shape[0]:,} rows · 8 years")
             except FileNotFoundError:
-                st.error("Run: kaggle datasets download -d mathurinache/world-happiness-report --unzip -p ./data")
-        elif sample == "Tips (regression demo)":
-            df = px.data.tips()
-            dataset_name = "Tips dataset"
-            st.success(f"Loaded {df.shape[0]:,} rows")
-        elif sample == "Iris (classification demo)":
-            df = px.data.iris()
-            dataset_name = "Iris dataset"
-            st.success(f"Loaded {df.shape[0]:,} rows")
+                st.error("Download the dataset first (see README)")
+        elif sample == "Tips":
+            df, dataset_name = px.data.tips(), "Tips"
+            st.success("244 rows loaded")
+        elif sample == "Iris":
+            df, dataset_name = px.data.iris(), "Iris"
+            st.success("150 rows loaded")
 
     if df is not None:
         st.divider()
-        st.markdown("## 📋 Columns")
+        st.markdown("**📋 Schema**")
         for col in df.columns:
             dtype = str(df[col].dtype)
-            icon = "🔢" if "int" in dtype or "float" in dtype else "📝"
+            icon = "🔢" if any(t in dtype for t in ("int", "float")) else "📝"
             st.caption(f"{icon} `{col}`")
 
     st.divider()
-
     is_happiness = df is not None and "happiness_score" in df.columns
-    if is_happiness:
-        st.markdown("""
-<div class='tip-box'>
-<b>💡 Try asking:</b><br>
-• Happiness trend over the years<br>
-• Top 10 happiest countries in 2021<br>
-• Which country improved the most?<br>
-• Correlation between GDP and happiness<br>
-• Compare happiness by region<br>
-• Distribution of happiness scores<br>
-• Outliers in happiness score
-</div>""", unsafe_allow_html=True)
-    else:
-        st.markdown("""
-<div class='tip-box'>
-<b>💡 Try asking:</b><br>
-• Show correlation heatmap<br>
-• Distribution of &lt;column&gt;<br>
-• Top 10 by &lt;column&gt;<br>
-• Any missing values?<br>
-• Compare &lt;col&gt; by group<br>
-• Outliers in &lt;column&gt;
-</div>""", unsafe_allow_html=True)
+    tips = [
+        ("Happiness trend over years", is_happiness),
+        ("Top 10 happiest countries", is_happiness),
+        ("Correlation between GDP and happiness", is_happiness),
+        ("Compare happiness by region", is_happiness),
+        ("Show correlation heatmap", not is_happiness),
+        ("Distribution of &lt;column&gt;", not is_happiness),
+        ("Top 10 by &lt;column&gt;", not is_happiness),
+        ("Outliers in &lt;column&gt;", not is_happiness),
+    ]
+    tip_lines = "<br>".join(f"• {t}" for t, show in tips if show)
+    st.markdown(f"<div class='info-card'><b>💡 Try asking:</b><br>{tip_lines}</div>", unsafe_allow_html=True)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-st.markdown("<div class='main-title'>🤖 AI Data Analysis Agent</div>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle'>Upload any dataset → ask questions in plain English → get instant insights</div>", unsafe_allow_html=True)
-st.markdown("")
+# ─────────────────────────────────────────────────────────────────────────────
+# HERO HEADER
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("<div class='hero-title'>🧠 DataMind AI</div>", unsafe_allow_html=True)
+st.markdown("<div class='hero-sub'>Upload any dataset · Ask in plain English · Get instant AI-powered insights</div>", unsafe_allow_html=True)
 
 if df is None:
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
-    c1.markdown("### 1️⃣ Load Data\nUpload a CSV or pick **World Happiness 2015–2022** from the sidebar.")
-    c2.markdown("### 2️⃣ Explore Insights\nAuto-generated charts appear instantly on load.")
-    c3.markdown("### 3️⃣ Ask Questions\nChat in plain English — get charts + text answers.")
+    c1.markdown("""<div class='metric-card'>
+        <div class='metric-num'>01</div>
+        <div class='metric-label'>Load any CSV</div>
+        <br><small style='color:#7ca3e0'>Upload from your machine or pick a built-in dataset from the sidebar</small>
+    </div>""", unsafe_allow_html=True)
+    c2.markdown("""<div class='metric-card'>
+        <div class='metric-num'>02</div>
+        <div class='metric-label'>Auto Insights</div>
+        <br><small style='color:#7ca3e0'>Correlation heatmaps, distributions, outlier detection — all instant</small>
+    </div>""", unsafe_allow_html=True)
+    c3.markdown("""<div class='metric-card'>
+        <div class='metric-num'>03</div>
+        <div class='metric-label'>Ask in English</div>
+        <br><small style='color:#7ca3e0'>Type a question, get a chart and a text answer powered by Llama 3.3</small>
+    </div>""", unsafe_allow_html=True)
     st.stop()
 
 
-# ── Stats bar ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# METRIC CARDS
+# ─────────────────────────────────────────────────────────────────────────────
 num_cols = df.select_dtypes(include="number").columns.tolist()
 cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
 is_happiness = "happiness_score" in df.columns
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Rows", f"{df.shape[0]:,}")
-c2.metric("Columns", df.shape[1])
-c3.metric("Numeric", len(num_cols))
-c4.metric("Categorical", len(cat_cols))
-if is_happiness:
-    c5.metric("Years", df["year"].nunique())
-else:
-    c5.metric("Missing", f"{df.isnull().sum().sum():,}")
+cards = [
+    (f"{df.shape[0]:,}", "Rows"),
+    (df.shape[1], "Columns"),
+    (len(num_cols), "Numeric"),
+    (len(cat_cols), "Categorical"),
+    (df["year"].nunique() if is_happiness else f"{df.isnull().sum().sum():,}", "Years" if is_happiness else "Missing"),
+]
+for col, (num, label) in zip([c1, c2, c3, c4, c5], cards):
+    col.markdown(f"""<div class='metric-card'>
+        <div class='metric-num'>{num}</div>
+        <div class='metric-label'>{label}</div>
+    </div>""", unsafe_allow_html=True)
 
-st.markdown("---")
+st.markdown("<br>", unsafe_allow_html=True)
 
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tabs = st.tabs(["📊 Auto-Insights", "🌍 Happiness Trends" if is_happiness else "📈 Trends", "💬 Chat with Data", "🗂 Raw Data"])
+# ─────────────────────────────────────────────────────────────────────────────
+# TABS
+# ─────────────────────────────────────────────────────────────────────────────
+tab_labels = ["📊 Auto-Insights", "🌍 Happiness Trends" if is_happiness else "📈 Trends", "💬 Chat", "🗂 Raw Data"]
+tabs = st.tabs(tab_labels)
 
 
-# ── Tab 1: Auto-Insights ──────────────────────────────────────────────────────
+# ── Tab 1: Auto-Insights ─────────────────────────────────────────────────────
 with tabs[0]:
-    st.markdown("### Instant insights")
-    with st.spinner("Generating..."):
+    with st.spinner("Generating insights..."):
         insights = auto_insights(df)
 
     if not insights:
-        st.info("No automatic charts available. Try the Chat tab!")
+        st.info("No automatic charts. Try the Chat tab!")
     else:
         for i in range(0, len(insights), 2):
             cols = st.columns(2)
@@ -172,157 +312,156 @@ with tabs[0]:
     st.dataframe(df.describe(include="all").T, use_container_width=True)
 
 
-# ── Tab 2: Happiness Trends (or generic trends) ───────────────────────────────
+# ── Tab 2: Happiness Trends ──────────────────────────────────────────────────
 with tabs[1]:
     if is_happiness:
-        st.markdown("### World Happiness — 8 Years of Data")
-
-        # ── Global avg happiness over time ────────────────────────────────────
         avg_by_year = df.groupby("year")["happiness_score"].mean().reset_index()
         fig1 = px.line(
             avg_by_year, x="year", y="happiness_score",
             title="Global Average Happiness Score (2015–2022)",
-            markers=True, labels={"happiness_score": "Avg Happiness Score"},
+            markers=True, template="plotly_dark",
         )
-        fig1.update_traces(line_color="#4F8BF9", line_width=3)
+        fig1.update_traces(line=dict(color="#4F8BF9", width=3))
+        fig1.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig1, use_container_width=True)
 
         col_a, col_b = st.columns(2)
+        latest_year = df["year"].max()
 
-        # ── Top 10 happiest (latest year) ─────────────────────────────────────
         with col_a:
-            latest_year = df["year"].max()
             top10 = df[df["year"] == latest_year].nlargest(10, "happiness_score")
             fig2 = px.bar(
                 top10, x="happiness_score", y="country", orientation="h",
                 title=f"Top 10 Happiest Countries ({latest_year})",
                 color="happiness_score", color_continuous_scale="Blues",
-                labels={"happiness_score": "Score", "country": ""},
+                template="plotly_dark",
             )
-            fig2.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+            fig2.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+            )
             st.plotly_chart(fig2, use_container_width=True)
 
-        # ── Happiness by region over time ─────────────────────────────────────
         with col_b:
             region_year = (
                 df[df["region"].notna()]
                 .groupby(["year", "region"])["happiness_score"]
-                .mean()
-                .reset_index()
+                .mean().reset_index()
             )
             fig3 = px.line(
                 region_year, x="year", y="happiness_score", color="region",
-                title="Happiness by Region Over Time",
-                markers=True, labels={"happiness_score": "Avg Score"},
+                title="Happiness by Region Over Time", markers=True,
+                template="plotly_dark",
             )
+            fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig3, use_container_width=True)
 
-        # ── GDP vs Happiness scatter ───────────────────────────────────────────
         fig4 = px.scatter(
             df[df["year"] == latest_year].dropna(subset=["gdp_per_capita", "happiness_score"]),
-            x="gdp_per_capita", y="happiness_score",
-            color="region", hover_name="country", size="happiness_score",
+            x="gdp_per_capita", y="happiness_score", color="region",
+            hover_name="country", size="happiness_score",
             title=f"GDP per Capita vs Happiness ({latest_year})",
-            labels={"gdp_per_capita": "GDP per Capita", "happiness_score": "Happiness Score"},
-            trendline="ols",
+            trendline="ols", template="plotly_dark",
         )
+        fig4.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig4, use_container_width=True)
 
-        # ── Most improved countries ────────────────────────────────────────────
         col_c, col_d = st.columns(2)
-
         with col_c:
             improved = most_improved(df, top_n=10)
             fig5 = px.bar(
                 improved, x="change", y="country", orientation="h",
                 title="Most Improved Countries (First → Last Year)",
                 color="change", color_continuous_scale="Greens",
-                labels={"change": "Score Change", "country": ""},
+                template="plotly_dark",
             )
-            fig5.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+            fig5.update_layout(
+                yaxis={"categoryorder": "total ascending"},
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+            )
             st.plotly_chart(fig5, use_container_width=True)
 
-        # ── Country spotlight ──────────────────────────────────────────────────
         with col_d:
             countries = sorted(df["country"].unique())
             selected = st.multiselect(
-                "Track specific countries over time",
+                "Track countries over time",
                 countries,
                 default=["Finland", "United States", "India", "China"],
             )
             if selected:
-                spotlight = df[df["country"].isin(selected)]
                 fig6 = px.line(
-                    spotlight, x="year", y="happiness_score", color="country",
-                    markers=True, title="Country Happiness Trends",
-                    labels={"happiness_score": "Score"},
+                    df[df["country"].isin(selected)],
+                    x="year", y="happiness_score", color="country",
+                    markers=True, title="Country Spotlight",
+                    template="plotly_dark",
                 )
+                fig6.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                 st.plotly_chart(fig6, use_container_width=True)
-
     else:
-        # Generic trend tab for non-happiness datasets
-        if "year" in df.columns or any("date" in c.lower() or "year" in c.lower() for c in df.columns):
-            time_col = "year" if "year" in df.columns else next(
-                c for c in df.columns if "date" in c.lower() or "year" in c.lower()
-            )
-            num = num_cols[0] if num_cols else None
-            if num:
-                trend = df.groupby(time_col)[num].mean().reset_index()
-                fig = px.line(trend, x=time_col, y=num, markers=True, title=f"{num} over time")
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No time column detected. Use the Chat tab to ask trend questions.")
+        st.info("Load the World Happiness dataset to see trend analysis.")
 
 
-# ── Tab 3: Chat ───────────────────────────────────────────────────────────────
+# ── Tab 3: Chat ──────────────────────────────────────────────────────────────
 with tabs[2]:
-    st.markdown("### Ask anything about your data")
+    st.markdown("### 💬 Chat with your data")
+    mode = "🟢 Llama 3.3 70B" if GROQ_KEY else "🔵 Rule-based"
+    st.caption(f"Mode: {mode}")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
     for msg in st.session_state.messages:
         if msg["role"] == "user":
-            st.markdown(f"<div class='user-msg'>👤 {msg['content']}</div>", unsafe_allow_html=True)
+            st.markdown(f"""<div class='user-bubble'>
+                <div class='bubble-label'>You</div>
+                {msg['content']}
+            </div>""", unsafe_allow_html=True)
         else:
             if msg.get("text"):
-                st.markdown(f"<div class='agent-msg'>🤖 {msg['text']}</div>", unsafe_allow_html=True)
+                st.markdown(f"""<div class='agent-bubble'>
+                    <div class='bubble-label'>DataMind</div>
+                    {msg['text']}
+                </div>""", unsafe_allow_html=True)
             if msg.get("fig"):
                 st.plotly_chart(msg["fig"], use_container_width=True)
             if msg.get("code") and st.session_state.get("show_code"):
                 with st.expander("Generated code"):
                     st.code(msg["code"], language="python")
 
-    show_code = st.checkbox("Show generated code", value=False, key="show_code")
+    c_left, c_right = st.columns([4, 1])
+    with c_right:
+        show_code = st.checkbox("Show code", key="show_code")
 
-    question = st.chat_input("Ask a question about your data...")
+    question = st.chat_input("Ask anything about your data...")
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.spinner("Analyzing..."):
-            result = analyze(question, df, groq_key or None)
+        with st.spinner("Thinking..."):
+            result = analyze(question, df, GROQ_KEY or None)
         result["role"] = "assistant"
         st.session_state.messages.append(result)
         st.rerun()
 
-    if st.session_state.messages and st.button("🗑 Clear chat"):
-        st.session_state.messages = []
-        st.rerun()
+    if st.session_state.messages:
+        if st.button("🗑 Clear chat"):
+            st.session_state.messages = []
+            st.rerun()
 
 
-# ── Tab 4: Raw Data ───────────────────────────────────────────────────────────
+# ── Tab 4: Raw Data ──────────────────────────────────────────────────────────
 with tabs[3]:
-    st.markdown("### Raw Data")
-
     if is_happiness:
-        year_filter = st.select_slider("Filter by year", options=sorted(df["year"].unique()), value=(2015, 2022))
-        filtered = df[df["year"].between(*year_filter)]
+        year_range = st.select_slider(
+            "Filter by year", options=sorted(df["year"].unique()), value=(2015, 2022)
+        )
+        view = df[df["year"].between(*year_range)]
     else:
-        filtered = df
+        view = df
 
-    st.dataframe(filtered, use_container_width=True, height=500)
+    st.dataframe(view, use_container_width=True, height=500)
     st.download_button(
-        "⬇️ Download as CSV",
-        filtered.to_csv(index=False),
-        "world_happiness_combined.csv" if is_happiness else "data.csv",
-        "text/csv",
+        "⬇️ Download CSV",
+        view.to_csv(index=False),
+        "data.csv", "text/csv",
     )
