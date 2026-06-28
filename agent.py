@@ -257,7 +257,7 @@ Question: {question}
 Write Python code to answer this:"""
 
     response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
