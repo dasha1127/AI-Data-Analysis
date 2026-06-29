@@ -55,7 +55,10 @@ async function apiFetch(path, options = {}) {
 // ── Chart rendering ───────────────────────────────────────────────────────────
 
 function renderChart(container, figData) {
-  // figData is the JSON Plotly figure from the backend
+  if (typeof Plotly === "undefined") {
+    container.innerHTML = `<p style="color:var(--muted);padding:20px">Plotly is still loading, please wait a moment and refresh.</p>`;
+    return;
+  }
   const layout = { ...figData.layout, ...PLOTLY_LAYOUT_PATCH };
   Plotly.react(container, figData.data, layout, PLOTLY_CONFIG);
 }
@@ -145,7 +148,7 @@ function renderMetrics(schema) {
 async function loadInsights() {
   if (!state.dataset) return;
   const panel = $("panel-insights");
-  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> Generating insights...</div>`;
+  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> crunching the numbers...</div>`;
 
   try {
     const insights = await apiFetch(`/insights/${state.dataset}`);
@@ -181,7 +184,7 @@ async function loadTrends() {
     return;
   }
 
-  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> Loading trend charts...</div>`;
+  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> pulling up the charts...</div>`;
 
   try {
     const trends = await apiFetch("/happiness/trends");
@@ -209,7 +212,7 @@ async function loadTrends() {
 async function loadRawData() {
   if (!state.dataset || !state.schema) return;
   const panel = $("panel-data");
-  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> Loading data...</div>`;
+  panel.innerHTML = `<div class="thinking"><span class="spinner"></span> loading...</div>`;
 
   // We only have schema — show columns as a placeholder table header
   const cols = state.schema.columns.map(c => c.name);
@@ -284,7 +287,7 @@ function appendBubble(role, text) {
 function appendThinking() {
   const el = document.createElement("div");
   el.className = "thinking";
-  el.innerHTML = `<span class="spinner"></span> Analyzing...`;
+  el.innerHTML = `<span class="spinner"></span> thinking...`;
   els.chatMessages.appendChild(el);
   scrollChat();
   return el;
@@ -347,7 +350,7 @@ async function handleUpload(file) {
   const form = new FormData();
   form.append("file", file);
 
-  els.uploadZone.innerHTML = `<span class="icon"><span class="spinner"></span></span>Uploading...`;
+  els.uploadZone.innerHTML = `<span class="icon"><span class="spinner"></span></span> uploading...`;
 
   try {
     const res = await fetch(`${API}/upload`, { method: "POST", body: form });
@@ -361,10 +364,10 @@ async function handleUpload(file) {
     btn.addEventListener("click", () => selectDataset(data.dataset_id));
     document.querySelector(".sidebar-section:first-of-type").appendChild(btn);
 
-    els.uploadZone.innerHTML = `<span class="icon">✅</span>Uploaded! Click the button above.`;
+    els.uploadZone.innerHTML = `<span class="icon">✅</span> got it! click above to explore.`;
     selectDataset(data.dataset_id);
   } catch (e) {
-    els.uploadZone.innerHTML = `<span class="icon">❌</span>Upload failed. Try again.`;
+    els.uploadZone.innerHTML = `<span class="icon">😬</span> something went wrong, try again.`;
   }
 }
 
@@ -393,5 +396,5 @@ function showError(msg) {
   console.error(msg);
 }
 
-// ── Init — auto-select happiness dataset ──────────────────────────────────────
-selectDataset("happiness");
+// ── Init — wait for full page load so Plotly is definitely ready ──────────────
+window.addEventListener("load", () => selectDataset("happiness"));

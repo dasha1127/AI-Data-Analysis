@@ -13,11 +13,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
+_ENV_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 import plotly.express as px
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,7 +116,8 @@ async def upload_csv(file: UploadFile):
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
     df = _get_df(req.dataset)
-    agent = DataAgent(df, req.groq_key or None)
+    key = req.groq_key or _ENV_GROQ_KEY or None
+    agent = DataAgent(df, key)
     result = agent.analyze(req.question)
     return {
         "fig":  _fig_to_dict(result["fig"]) if result.get("fig") else None,

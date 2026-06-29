@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
-  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <script src="/static/plotly.min.js"></script>
 </head>
 <body>
 
@@ -15,56 +15,50 @@
 
   <!-- ── Sidebar ── -->
   <aside class="sidebar">
-    <div class="logo">🧠 DataMind AI</div>
+    <div class="logo">✦ <span>DataMind</span></div>
 
     <div class="sidebar-section">
-      <h3>Mode</h3>
-      <span class="pill off" id="pill-status">
-        <span class="dot"></span> Rule-based mode
+      <h3>Status</h3>
+      <span class="pill on" id="pill-status">
+        <span class="dot"></span> AI ready
       </span>
-      <br><br>
-      <input
-        id="groq-key"
-        type="password"
-        placeholder="Paste Groq API key for LLM mode"
-        style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border);
-               border-radius:8px;padding:8px 12px;color:var(--text);font-size:0.8rem;outline:none;"
-      />
-      <p style="font-size:0.7rem;color:var(--muted);margin-top:6px">Free key at console.groq.com</p>
+      <p style="font-size:0.71rem;color:var(--muted);margin-top:8px;line-height:1.5">
+        powered by Llama 3.3 70B — ask it anything, it actually gets it
+      </p>
     </div>
 
     <div class="sidebar-section">
-      <h3>Datasets</h3>
+      <h3>Pick a dataset</h3>
       <button class="dataset-btn" data-name="happiness">🌍 World Happiness 2015–2022</button>
       <button class="dataset-btn" data-name="tips">🍽️ Restaurant Tips</button>
       <button class="dataset-btn" data-name="iris">🌸 Iris Flowers</button>
     </div>
 
     <div class="sidebar-section">
-      <h3>Upload CSV</h3>
+      <h3>Or bring your own</h3>
       <div class="upload-zone" id="upload-zone">
         <input type="file" id="upload-input" accept=".csv" />
-        <span class="icon">📂</span>
-        Click or drag a CSV here
+        <span class="icon">📁</span>
+        drop a CSV here
       </div>
     </div>
 
     <div class="sidebar-section">
-      <h3>Schema</h3>
+      <h3>Columns</h3>
       <ul class="schema-list" id="schema-list">
-        <li style="color:var(--muted);font-size:0.75rem">Select a dataset to see columns</li>
+        <li style="color:var(--muted);font-size:0.75rem">pick something first 👆</li>
       </ul>
     </div>
 
     <div class="sidebar-section">
-      <h3>Try asking</h3>
-      <div style="font-size:0.78rem;color:var(--muted);line-height:1.9">
-        • Happiness trend over years<br>
-        • Top 10 happiest countries<br>
-        • Correlation between GDP and happiness<br>
-        • Any missing values?<br>
-        • Compare happiness by region<br>
-        • Outliers in happiness score
+      <div class="tips-box">
+        <p>things you can ask</p>
+        happiness trend over the years<br>
+        top 10 happiest countries<br>
+        gdp vs happiness, any link?<br>
+        which country improved most?<br>
+        any outliers in the data?<br>
+        compare regions side by side
       </div>
     </div>
   </aside>
@@ -72,8 +66,8 @@
   <!-- ── Main ── -->
   <main>
     <header>
-      <h1 class="hero-title">DataMind AI</h1>
-      <p class="hero-sub">Upload any dataset · Ask questions in plain English · Get instant AI-powered insights</p>
+      <h1 class="hero-title">your data, <span>explained.</span></h1>
+      <p class="hero-sub">drop any CSV · ask in plain english · get charts that actually make sense</p>
     </header>
 
     <div class="metrics" id="metrics">
@@ -85,25 +79,27 @@
     </div>
 
     <div class="tabs">
-      <button class="tab-btn active" data-tab="insights">📊 Auto-Insights</button>
-      <button class="tab-btn"        data-tab="trends">🌍 Happiness Trends</button>
-      <button class="tab-btn"        data-tab="chat">💬 Chat</button>
-      <button class="tab-btn"        data-tab="data">🗂 Data</button>
+      <button class="tab-btn active" data-tab="insights">insights</button>
+      <button class="tab-btn"        data-tab="trends">trends</button>
+      <button class="tab-btn"        data-tab="chat">chat</button>
+      <button class="tab-btn"        data-tab="data">raw data</button>
     </div>
 
     <div class="tab-panels">
 
       <div class="panel active" id="panel-insights">
         <div class="empty-state">
-          <span class="empty-icon">📊</span>
-          Select a dataset to generate insights
+          <span class="empty-icon">👈</span>
+          pick a dataset to see what's in it
+          <small>auto-generates correlations, distributions, and outlier charts</small>
         </div>
       </div>
 
       <div class="panel" id="panel-trends">
         <div class="empty-state">
           <span class="empty-icon">🌍</span>
-          Select "World Happiness 2015–2022" to see trends
+          select "World Happiness 2015–2022" to see 8 years of trend charts
+          <small>gdp vs happiness · happiest regions · most improved countries</small>
         </div>
       </div>
 
@@ -112,13 +108,13 @@
           <div class="chat-messages" id="chat-messages">
             <div class="bubble agent">
               <div class="bubble-meta">DataMind</div>
-              Hey! Select a dataset and ask me anything — I'll answer with charts and text 🧠
+              hey! pick a dataset on the left and ask me anything about it — I'll give you a chart 📊
             </div>
           </div>
           <div class="chat-input-row">
             <input id="chat-input" class="chat-input" type="text"
-                   placeholder="Ask anything about your data..." autocomplete="off" />
-            <button id="send-btn" class="send-btn">Send</button>
+                   placeholder="e.g. which country improved the most?" autocomplete="off" />
+            <button id="send-btn" class="send-btn">→</button>
           </div>
         </div>
       </div>
@@ -126,7 +122,7 @@
       <div class="panel" id="panel-data">
         <div class="empty-state">
           <span class="empty-icon">🗂</span>
-          Select a dataset to preview data
+          pick a dataset first
         </div>
       </div>
 
